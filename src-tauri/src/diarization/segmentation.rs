@@ -62,24 +62,34 @@ pub fn segment_audio_windows(
     session: &mut Session,
 ) -> Result<Vec<RawTurnWindow>, DiarizationError> {
     let mut turns = Vec::new();
-    for (start, end) in window_bounds(audio.samples.len()) {
-        let mut chunk = vec![0.0_f32; WINDOW_SAMPLES];
-        chunk[..end - start].copy_from_slice(&audio.samples[start..end]);
-
-        let frames = infer_window_frames(session, chunk)?;
-        if frames.is_empty() {
-            continue;
-        }
-        let window_start_ms = start as u64 * 1000 / SAMPLE_RATE;
-        let frame_ms = WINDOW_MS as f64 / frames.len() as f64;
-        turns.extend(aggregate_frames(
-            &frames,
-            window_start_ms,
-            frame_ms,
-            audio.duration_ms,
-        ));
+    for bounds in window_bounds(audio.samples.len()) {
+        turns.extend(segment_window(audio, session, bounds)?);
     }
     Ok(turns)
+}
+
+/// Runs powerset segmentation over the single window `(start, end)` returned by
+/// [`window_bounds`] and returns its local speaker turns in absolute milliseconds.
+pub fn segment_window(
+    audio: &AudioBuffer16kMono,
+    session: &mut Session,
+    (start, end): (usize, usize),
+) -> Result<Vec<RawTurnWindow>, DiarizationError> {
+    let mut chunk = vec![0.0_f32; WINDOW_SAMPLES];
+    chunk[..end - start].copy_from_slice(&audio.samples[start..end]);
+
+    let frames = infer_window_frames(session, chunk)?;
+    if frames.is_empty() {
+        return Ok(Vec::new());
+    }
+    let window_start_ms = start as u64 * 1000 / SAMPLE_RATE;
+    let frame_ms = WINDOW_MS as f64 / frames.len() as f64;
+    Ok(aggregate_frames(
+        &frames,
+        window_start_ms,
+        frame_ms,
+        audio.duration_ms,
+    ))
 }
 
 fn infer_window_frames(
@@ -113,7 +123,7 @@ fn inference_error(err: ort::Error) -> DiarizationError {
 
 /// Sample bounds `(start, end)` of each sliding window; `end` is clamped to the
 /// audio length, and the caller zero-pads the remainder of a short final window.
-fn window_bounds(total_samples: usize) -> Vec<(usize, usize)> {
+pub fn window_bounds(total_samples: usize) -> Vec<(usize, usize)> {
     let mut bounds = Vec::new();
     let mut start = 0;
     while start < total_samples {
